@@ -1,12 +1,12 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import StudyDashboard from "@/components/StudyDashboard";
+import HabitDashboard from "@/components/HabitDashboard";
 
-export default async function StudyPage() {
+export default async function HabitPage() {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
-  return <StudyDashboard />;
+  return <HabitDashboard userId={user.id} />;
 }

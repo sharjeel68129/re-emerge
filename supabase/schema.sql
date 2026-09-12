@@ -282,3 +282,59 @@ create policy "course_events: owner read" on course_events for select using (aut
 create policy "course_events: owner insert" on course_events for insert with check (auth.uid() = user_id);
 create policy "course_events: owner update" on course_events for update using (auth.uid() = user_id);
 create policy "course_events: owner delete" on course_events for delete using (auth.uid() = user_id);
+
+-- =====================================================================
+-- RE:Habit module (replaces the scrapped RE:Calendar / RE:Study)
+-- =====================================================================
+-- If you ran the courses/course_events migration earlier, you can drop
+-- those now (optional, no longer used):
+--   drop table if exists course_events;
+--   drop table if exists courses;
+
+create table if not exists habits (
+  id uuid primary key default uuid_generate_v4(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  details text,
+  interval_days integer not null check (interval_days > 0),
+  start_date date not null default current_date,
+  created_at timestamptz not null default now()
+);
+
+-- Only resolved occurrences are ever stored (done or missed). The
+-- current/future occurrence is computed on the fly from interval_days
+-- and start_date, and only written here once it's ticked done or its
+-- window fully elapses without being ticked (= missed).
+create table if not exists habit_logs (
+  id uuid primary key default uuid_generate_v4(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  habit_id uuid not null references habits(id) on delete cascade,
+  occurrence_index integer not null,
+  due_date date not null,
+  status text not null check (status in ('done','missed')),
+  completed_at timestamptz,
+  created_at timestamptz not null default now(),
+  unique (habit_id, occurrence_index)
+);
+create index if not exists habit_logs_habit_idx on habit_logs (habit_id);
+
+alter table habits enable row level security;
+alter table habit_logs enable row level security;
+
+drop policy if exists "habits: owner read" on habits;
+drop policy if exists "habits: owner insert" on habits;
+drop policy if exists "habits: owner update" on habits;
+drop policy if exists "habits: owner delete" on habits;
+create policy "habits: owner read" on habits for select using (auth.uid() = user_id);
+create policy "habits: owner insert" on habits for insert with check (auth.uid() = user_id);
+create policy "habits: owner update" on habits for update using (auth.uid() = user_id);
+create policy "habits: owner delete" on habits for delete using (auth.uid() = user_id);
+
+drop policy if exists "habit_logs: owner read" on habit_logs;
+drop policy if exists "habit_logs: owner insert" on habit_logs;
+drop policy if exists "habit_logs: owner update" on habit_logs;
+drop policy if exists "habit_logs: owner delete" on habit_logs;
+create policy "habit_logs: owner read" on habit_logs for select using (auth.uid() = user_id);
+create policy "habit_logs: owner insert" on habit_logs for insert with check (auth.uid() = user_id);
+create policy "habit_logs: owner update" on habit_logs for update using (auth.uid() = user_id);
+create policy "habit_logs: owner delete" on habit_logs for delete using (auth.uid() = user_id);

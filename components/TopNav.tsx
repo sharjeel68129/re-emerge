@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 
-export default function TopNav({ active }: { active: "task" | "namaz" | "calendar" | "study" }) {
+export default function TopNav({ active }: { active: "task" | "namaz" | "habit" }) {
   const btn = (isActive: boolean) =>
     [
       "focus-ring font-serif text-base px-2.5 py-1.5 border transition-colors",
@@ -14,8 +14,7 @@ export default function TopNav({ active }: { active: "task" | "namaz" | "calenda
       <div className="flex gap-2 flex-wrap">
         <Link href="/" className={btn(active === "task")}>RE:Task</Link>
         <Link href="/namaz" className={btn(active === "namaz")}>RE:Namaz</Link>
-        <Link href="/calendar" className={btn(active === "calendar")}>RE:Calendar</Link>
-        <Link href="/study" className={btn(active === "study")}>RE:Study</Link>
+        <Link href="/habit" className={btn(active === "habit")}>RE:Habit</Link>
       </div>
       <Link
         href="/settings"
