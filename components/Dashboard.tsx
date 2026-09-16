@@ -21,7 +21,6 @@ import ProfileSetup from "@/components/ProfileSetup";
 import SemesterManager from "@/components/SemesterManager";
 import EditTaskModal, { TaskEdits } from "@/components/EditTaskModal";
 import ConfirmDialog from "@/components/ConfirmDialog";
-import { periodEnd, taskDate } from "@/lib/periodLabel";
 
 export default function Dashboard({
   userId,
@@ -83,13 +82,16 @@ export default function Dashboard({
       );
     }
 
-    // Sweep for anything resolved whose period has already ended, and
-    // archive it now (hidden from view, but never deleted — the PDF
-    // still pulls archived tasks too).
+    // Sweep: any resolved task (completed/failed/excused) gets archived
+    // once local midnight has passed since it was resolved — uniform
+    // across all categories, not tied to each category's own period end.
+    const todayStr = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD, local
     const toArchive = loadedTasks.filter((t) => {
       if (!isResolved(t)) return false;
-      const end = periodEnd(t.category, taskDate(t), loadedSemesters);
-      return end !== null && Date.now() > end.getTime();
+      const resolvedAt = t.completed_at ?? t.failed_at ?? t.excused_at;
+      if (!resolvedAt) return false;
+      const resolvedDateStr = new Date(resolvedAt).toLocaleDateString("en-CA");
+      return resolvedDateStr < todayStr;
     });
     if (toArchive.length > 0) {
       await supabase.from("tasks").update({ archived: true }).in("id", toArchive.map((t) => t.id));

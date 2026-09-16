@@ -14,18 +14,26 @@ function todayLocal(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+function dayBefore(dateISO: string): string {
+  const d = new Date(dateISO + "T00:00:00");
+  d.setDate(d.getDate() - 1);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 export default function NamazDashboard({ userId }: { userId: string }) {
   const supabase = useMemo(() => createClient(), []);
   const [logs, setLogs] = useState<NamazLog[]>([]);
   const [qaza, setQaza] = useState<NamazQaza[]>([]);
   const [loading, setLoading] = useState(true);
-  const [missedFor, setMissedFor] = useState<Prayer | null>(null);
+  const [missedFor, setMissedFor] = useState<{ prayer: Prayer; date: string } | null>(null);
   const [qazaInput, setQazaInput] = useState<Record<Prayer, string>>({
     fajr: "1", zuhr: "1", asr: "1", maghrib: "1", isha: "1",
   });
   const [pendingQaza, setPendingQaza] = useState<{ prayer: Prayer; count: number } | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
   const today = todayLocal();
+  const yesterday = dayBefore(today);
 
   const fetchAll = useCallback(async () => {
     const [{ data: logData }, { data: qazaData }] = await Promise.all([
@@ -41,11 +49,17 @@ export default function NamazDashboard({ userId }: { userId: string }) {
     fetchAll();
   }, [fetchAll]);
 
-  const todayLogs = useMemo(() => {
+  function logsForDate(date: string): Partial<Record<Prayer, NamazLog>> {
     const map: Partial<Record<Prayer, NamazLog>> = {};
-    for (const l of logs) if (l.date === today) map[l.prayer] = l;
+    for (const l of logs) if (l.date === date) map[l.prayer] = l;
     return map;
-  }, [logs, today]);
+  }
+  const todayLogs = useMemo(() => logsForDate(today), [logs, today]);
+  const yesterdayLogs = useMemo(() => logsForDate(yesterday), [logs, yesterday]);
+  // Catch-up stays available for the entire span of "today" — since a
+  // namaz day already runs a full ~24h (4am to 4am), that's exactly a
+  // 24h grace window after yesterday closed.
+  const yesterdayNeedsCatchUp = PRAYER_ORDER.some((p) => !yesterdayLogs[p]);
 
   const counters = useMemo(() => {
     const c: Record<Prayer, number> = { ...BASELINE };
@@ -60,22 +74,22 @@ export default function NamazDashboard({ userId }: { userId: string }) {
     return c;
   }, [qaza]);
 
-  async function upsertToday(prayer: Prayer, status: "prayed" | "missed", excused: boolean, note: string | null) {
+  async function upsertLog(prayer: Prayer, date: string, status: "prayed" | "missed", excused: boolean, note: string | null) {
     const { data, error } = await supabase
       .from("namaz_logs")
       .upsert(
-        { user_id: userId, prayer, date: today, status, excused, excuse_note: note },
+        { user_id: userId, prayer, date, status, excused, excuse_note: note },
         { onConflict: "user_id,prayer,date" }
       )
       .select()
       .single();
     if (!error && data) {
-      setLogs((prev) => [...prev.filter((l) => !(l.prayer === prayer && l.date === today)), data as NamazLog]);
+      setLogs((prev) => [...prev.filter((l) => !(l.prayer === prayer && l.date === date)), data as NamazLog]);
     }
   }
 
-  async function undo(prayer: Prayer) {
-    const log = todayLogs[prayer];
+  async function undo(prayer: Prayer, date: string) {
+    const log = logsForDate(date)[prayer];
     if (!log) return;
     const { error } = await supabase.from("namaz_logs").delete().eq("id", log.id);
     if (!error) setLogs((prev) => prev.filter((l) => l.id !== log.id));
@@ -114,6 +128,56 @@ export default function NamazDashboard({ userId }: { userId: string }) {
     }
   }
 
+  function PrayerList({ date, logsMap }: { date: string; logsMap: Partial<Record<Prayer, NamazLog>> }) {
+    return (
+      <ul>
+        {PRAYER_ORDER.map((p) => {
+          const log = logsMap[p];
+          if (log) {
+            return (
+              <li key={p} className="flex items-center justify-between py-3 border-b border-rule gap-3">
+                <div className="min-w-0">
+                  <span className="text-ink">{PRAYER_LABELS[p]}</span>
+                  <span
+                    className={[
+                      "ml-2 text-xs font-mono",
+                      log.status === "prayed" ? "text-moss" : log.excused ? "text-gold" : "text-rust",
+                    ].join(" ")}
+                  >
+                    {log.status === "prayed" ? "prayed" : log.excused ? "missed · excused" : "missed"}
+                  </span>
+                  {log.excuse_note && <p className="text-xs text-ink2 mt-0.5">{log.excuse_note}</p>}
+                </div>
+                <button onClick={() => undo(p, date)} className="focus-ring text-xs text-ink2 hover:text-ink underline underline-offset-2 shrink-0">
+                  undo
+                </button>
+              </li>
+            );
+          }
+          return (
+            <li key={p} className="flex items-center justify-between py-3 border-b border-rule gap-3">
+              <span className="text-ink">{PRAYER_LABELS[p]}</span>
+              <div className="flex gap-2 shrink-0">
+                <button
+                  onClick={() => upsertLog(p, date, "prayed", false, null)}
+                  className="focus-ring text-xs bg-moss text-paper px-2 py-1"
+                >
+                  prayed
+                </button>
+                <button
+                  onClick={() => setMissedFor({ prayer: p, date })}
+                  className="focus-ring text-xs bg-rust text-paper px-2 py-1"
+                >
+                  missed
+                </button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    );
+  }
+
   return (
     <main className="min-h-screen max-w-2xl mx-auto px-6 py-10">
       <TopNav active="namaz" />
@@ -124,55 +188,21 @@ export default function NamazDashboard({ userId }: { userId: string }) {
       {loading ? (
         <p className="text-ink2 text-sm">Loading…</p>
       ) : (
-        <ul className="mb-10">
-          {PRAYER_ORDER.map((p) => {
-            const log = todayLogs[p];
-            return (
-              <li key={p} className="flex items-center justify-between py-3 border-b border-rule gap-3">
-                <div className="min-w-0">
-                  <span className="text-ink">{PRAYER_LABELS[p]}</span>
-                  {log && (
-                    <span
-                      className={[
-                        "ml-2 text-xs font-mono",
-                        log.status === "prayed" ? "text-moss" : log.excused ? "text-gold" : "text-rust",
-                      ].join(" ")}
-                    >
-                      {log.status === "prayed" ? "prayed" : log.excused ? "missed · excused" : "missed"}
-                    </span>
-                  )}
-                  {log?.excuse_note && <p className="text-xs text-ink2 mt-0.5">{log.excuse_note}</p>}
-                </div>
-                {!log ? (
-                  <div className="flex gap-2 shrink-0">
-                    <button
-                      onClick={() => upsertToday(p, "prayed", false, null)}
-                      className="focus-ring text-xs bg-moss text-paper px-2 py-1"
-                    >
-                      prayed
-                    </button>
-                    <button
-                      onClick={() => setMissedFor(p)}
-                      className="focus-ring text-xs bg-rust text-paper px-2 py-1"
-                    >
-                      missed
-                    </button>
-                  </div>
-                ) : (
-                  <button onClick={() => undo(p)} className="focus-ring text-xs text-ink2 hover:text-ink underline underline-offset-2 shrink-0">
-                    undo
-                  </button>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+        <div className="mb-6">
+          <PrayerList date={today} logsMap={todayLogs} />
+        </div>
+      )}
+
+      {!loading && yesterdayNeedsCatchUp && (
+        <div className="mb-10 border border-gold/60 bg-gold/5 p-4">
+          <p className="text-sm text-ink mb-1">Catch up — {yesterday}</p>
+          <p className="text-xs text-ink2 mb-3">Available for 24h after the day ends, then it's locked in.</p>
+          <PrayerList date={yesterday} logsMap={yesterdayLogs} />
+        </div>
       )}
 
       <h2 className="font-serif text-2xl text-ink mb-1">Standing</h2>
-      <p className="text-ink2 text-xs mb-4">
-        -1 per miss, +1 per qaza prayed.
-      </p>
+      <p className="text-ink2 text-xs mb-4">-1 per miss, +1 per qaza prayed.</p>
       <ul className="mb-10">
         {PRAYER_ORDER.map((p) => (
           <li key={p} className="flex items-center justify-between py-2 border-b border-rule text-sm gap-3 flex-wrap">
@@ -234,14 +264,14 @@ export default function NamazDashboard({ userId }: { userId: string }) {
 
       {missedFor && (
         <ConfirmNoteDialog
-          title={`Mark ${PRAYER_LABELS[missedFor]} as missed?`}
+          title={`Mark ${PRAYER_LABELS[missedFor.prayer]} as missed?`}
           message="Leave the note blank if not excused. Either way, a qaza is owed."
           noteLabel="Circumstances (leave blank if not excused)"
           confirmLabel="Mark missed"
           danger
           onCancel={() => setMissedFor(null)}
           onConfirm={(note) => {
-            upsertToday(missedFor, "missed", !!note.trim(), note.trim() || null);
+            upsertLog(missedFor.prayer, missedFor.date, "missed", !!note.trim(), note.trim() || null);
             setMissedFor(null);
           }}
         />

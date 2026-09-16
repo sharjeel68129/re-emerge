@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Habit, HabitLog, INTERVAL_PRESETS } from "@/types/habit";
-import { currentOccurrenceIndex, occurrenceDueDate, repetitionLabel, todayLocal } from "@/lib/habit";
+import { currentOccurrenceIndex, graceExpired, occurrenceDueDate, periodEndTimestamp, repetitionLabel, todayLocal } from "@/lib/habit";
 import TopNav from "@/components/TopNav";
 import ConfirmDialog from "@/components/ConfirmDialog";
 
@@ -38,7 +38,7 @@ export default function HabitDashboard({ userId }: { userId: string }) {
       const kCurrent = currentOccurrenceIndex(habit, today);
       const existing = new Set(loadedLogs.filter((x) => x.habit_id === habit.id).map((x) => x.occurrence_index));
       for (let k = 0; k < kCurrent; k++) {
-        if (!existing.has(k)) {
+        if (!existing.has(k) && graceExpired(habit, k)) {
           missingRows.push({
             user_id: userId,
             habit_id: habit.id,
@@ -83,8 +83,7 @@ export default function HabitDashboard({ userId }: { userId: string }) {
     }
   }
 
-  async function tick(habit: Habit) {
-    const k = currentOccurrenceIndex(habit, todayLocal());
+  async function tick(habit: Habit, k: number) {
     const { data, error } = await supabase
       .from("habit_logs")
       .upsert(
@@ -211,6 +210,13 @@ export default function HabitDashboard({ userId }: { userId: string }) {
             periodEnd.setDate(periodEnd.getDate() + habit.interval_days - 1);
             const daysLeft = Math.max(0, Math.round((periodEnd.getTime() - new Date(today + "T00:00:00").getTime()) / 86400000));
 
+            const prevK = k - 1;
+            const prevLog = prevK >= 0 ? logs.find((l) => l.habit_id === habit.id && l.occurrence_index === prevK) : undefined;
+            const showCatchUp = prevK >= 0 && !prevLog && !graceExpired(habit, prevK);
+            const catchUpHoursLeft = showCatchUp
+              ? Math.max(0, Math.ceil((periodEndTimestamp(habit, prevK) + 24 * 60 * 60 * 1000 - Date.now()) / (60 * 60 * 1000)))
+              : 0;
+
             return (
               <li key={habit.id} className="border border-rule bg-white/40 p-4">
                 <div className="flex items-start justify-between gap-3">
@@ -223,6 +229,15 @@ export default function HabitDashboard({ userId }: { userId: string }) {
                     </p>
                   </div>
                   <div className="flex flex-col items-end gap-1 shrink-0">
+                    {showCatchUp && (
+                      <button
+                        onClick={() => tick(habit, prevK)}
+                        className="focus-ring text-xs bg-gold text-paper px-2 py-1"
+                        title={`Catch up: last period, ${catchUpHoursLeft}h left`}
+                      >
+                        catch up last period ({catchUpHoursLeft}h left)
+                      </button>
+                    )}
                     {currentLog?.status === "done" ? (
                       <button
                         onClick={() => undoTick(habit, currentLog)}
@@ -231,7 +246,7 @@ export default function HabitDashboard({ userId }: { userId: string }) {
                         done — undo
                       </button>
                     ) : (
-                      <button onClick={() => tick(habit)} className="focus-ring text-xs bg-ink text-paper px-3 py-1.5">
+                      <button onClick={() => tick(habit, k)} className="focus-ring text-xs bg-ink text-paper px-3 py-1.5">
                         tick off
                       </button>
                     )}

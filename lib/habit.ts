@@ -15,6 +15,19 @@ export function occurrenceDueDate(habit: Pick<Habit, "start_date" | "interval_da
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/** Timestamp (ms) when occurrence k's window ends (= start of k+1). */
+export function periodEndTimestamp(habit: Pick<Habit, "start_date" | "interval_days">, k: number): number {
+  const nextDue = occurrenceDueDate(habit, k + 1);
+  return new Date(nextDue + "T00:00:00").getTime();
+}
+
+const GRACE_MS = 24 * 60 * 60 * 1000;
+
+/** True once an occurrence's 24h catch-up grace period has fully elapsed. */
+export function graceExpired(habit: Pick<Habit, "start_date" | "interval_days">, k: number): boolean {
+  return Date.now() >= periodEndTimestamp(habit, k) + GRACE_MS;
+}
+
 /** Which occurrence period "today" falls in (0-indexed). */
 export function currentOccurrenceIndex(habit: Pick<Habit, "start_date" | "interval_days">, todayISO: string): number {
   const start = new Date(habit.start_date + "T00:00:00").getTime();
