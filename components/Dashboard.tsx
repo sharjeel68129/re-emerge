@@ -21,6 +21,7 @@ import ProfileSetup from "@/components/ProfileSetup";
 import SemesterManager from "@/components/SemesterManager";
 import EditTaskModal, { TaskEdits } from "@/components/EditTaskModal";
 import ConfirmDialog from "@/components/ConfirmDialog";
+import { taskDate } from "@/lib/periodLabel";
 
 export default function Dashboard({
   userId,
@@ -44,9 +45,18 @@ export default function Dashboard({
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Task | null>(null);
 
+  const GRACE_MS = 30 * 60 * 1000;
+
+  function isPastGrace(t: Task): boolean {
+    if (!isResolved(t)) return false;
+    const resolvedAt = t.completed_at ?? t.failed_at ?? t.excused_at;
+    if (!resolvedAt) return false;
+    return Date.now() - new Date(resolvedAt).getTime() >= GRACE_MS;
+  }
+
   const fetchAll = useCallback(async () => {
     const [{ data: taskData }, { data: subtaskData }, { data: semesterData }] = await Promise.all([
-      supabase.from("tasks").select("*").eq("archived", false).order("order_index", { ascending: true }),
+      supabase.from("tasks").select("*").eq("archived", false),
       supabase.from("subtasks").select("*").order("order_index", { ascending: true }),
       supabase.from("semesters").select("*").order("start_date", { ascending: true }),
     ]);
@@ -54,45 +64,10 @@ export default function Dashboard({
     const loadedTasks = (taskData as Task[]) ?? [];
     const loadedSemesters = (semesterData as Semester[]) ?? [];
 
-    // Tasks created before reordering existed all share order_index = 0,
-    // which makes the up/down buttons a no-op (swapping 0 with 0 changes
-    // nothing). Give every task within a category a distinct index the
-    // first time it's loaded, using created_at as the tiebreaker so the
-    // order you're used to seeing doesn't jump around.
-    const byCategory = new Map<string, Task[]>();
-    for (const t of loadedTasks) {
-      if (!byCategory.has(t.category)) byCategory.set(t.category, []);
-      byCategory.get(t.category)!.push(t);
-    }
-    const renumberUpdates: { id: string; order_index: number }[] = [];
-    for (const list of byCategory.values()) {
-      const sorted = [...list].sort(
-        (a, b) => a.order_index - b.order_index || a.created_at.localeCompare(b.created_at)
-      );
-      sorted.forEach((t, i) => {
-        if (t.order_index !== i) {
-          t.order_index = i;
-          renumberUpdates.push({ id: t.id, order_index: i });
-        }
-      });
-    }
-    if (renumberUpdates.length > 0) {
-      await Promise.all(
-        renumberUpdates.map((u) => supabase.from("tasks").update({ order_index: u.order_index }).eq("id", u.id))
-      );
-    }
-
-    // Sweep: any resolved task (completed/failed/excused) gets archived
-    // once local midnight has passed since it was resolved — uniform
-    // across all categories, not tied to each category's own period end.
-    const todayStr = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD, local
-    const toArchive = loadedTasks.filter((t) => {
-      if (!isResolved(t)) return false;
-      const resolvedAt = t.completed_at ?? t.failed_at ?? t.excused_at;
-      if (!resolvedAt) return false;
-      const resolvedDateStr = new Date(resolvedAt).toLocaleDateString("en-CA");
-      return resolvedDateStr < todayStr;
-    });
+    // Anything resolved (completed/failed/excused) for 30+ minutes
+    // already gets archived here too, so a fresh page load catches
+    // what the live interval below missed while the tab was closed.
+    const toArchive = loadedTasks.filter(isPastGrace);
     if (toArchive.length > 0) {
       await supabase.from("tasks").update({ archived: true }).in("id", toArchive.map((t) => t.id));
     }
@@ -108,6 +83,21 @@ export default function Dashboard({
     fetchAll();
   }, [fetchAll]);
 
+  // Live sweep: a resolved task drops off the active list 30 minutes
+  // after it was resolved, without needing a page reload.
+  useEffect(() => {
+    const id = setInterval(() => {
+      setTasks((prev) => {
+        const stay = prev.filter((t) => !isPastGrace(t));
+        if (stay.length === prev.length) return prev;
+        const archiveIds = prev.filter(isPastGrace).map((t) => t.id);
+        supabase.from("tasks").update({ archived: true }).in("id", archiveIds).then();
+        return stay;
+      });
+    }, 60 * 1000);
+    return () => clearInterval(id);
+  }, [supabase]);
+
   const visible = tasks.filter((t) => t.category === active);
   const counts = CATEGORY_ORDER.reduce((acc, cat) => {
     acc[cat] = tasks.filter((t) => t.category === cat && !isResolved(t)).length;
@@ -115,9 +105,6 @@ export default function Dashboard({
   }, {} as Record<TaskCategory, number>);
 
   async function addTask(payload: AddTaskPayload) {
-    const inCategory = tasks.filter((t) => t.category === active);
-    const nextOrder = inCategory.length > 0 ? Math.max(...inCategory.map((t) => t.order_index)) + 1 : 0;
-
     const { data, error } = await supabase
       .from("tasks")
       .insert({
@@ -130,7 +117,6 @@ export default function Dashboard({
         deadline_mode: payload.deadlineMode,
         task_type: payload.taskType,
         target_value: payload.targetValue,
-        order_index: nextOrder,
       })
       .select()
       .single();
@@ -256,31 +242,6 @@ export default function Dashboard({
     if (!error && data) setTasks((prev) => prev.map((t) => (t.id === task.id ? (data as Task) : t)));
   }
 
-  async function moveTask(task: Task, direction: -1 | 1) {
-    const inCategory = tasks
-      .filter((t) => t.category === task.category)
-      .sort((a, b) => a.order_index - b.order_index);
-    const index = inCategory.findIndex((t) => t.id === task.id);
-    const swapWith = inCategory[index + direction];
-    if (!swapWith) return;
-
-    const a = { id: task.id, order_index: swapWith.order_index };
-    const b = { id: swapWith.id, order_index: task.order_index };
-
-    await Promise.all([
-      supabase.from("tasks").update({ order_index: a.order_index }).eq("id", a.id),
-      supabase.from("tasks").update({ order_index: b.order_index }).eq("id", b.id),
-    ]);
-
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.id === a.id) return { ...t, order_index: a.order_index };
-        if (t.id === b.id) return { ...t, order_index: b.order_index };
-        return t;
-      })
-    );
-  }
-
   async function confirmDelete() {
     if (!pendingDelete) return;
     const { error } = await supabase.from("tasks").delete().eq("id", pendingDelete.id);
@@ -297,7 +258,7 @@ export default function Dashboard({
     }
   }
 
-  const sortedVisible = [...visible].sort((a, b) => a.order_index - b.order_index);
+  const sortedVisible = [...visible].sort((a, b) => taskDate(a).localeCompare(taskDate(b)));
 
   return (
     <main className="min-h-screen max-w-4xl mx-auto px-6 py-10">
@@ -335,19 +296,15 @@ export default function Dashboard({
             </p>
           ) : (
             <ul>
-              {sortedVisible.map((task, i) => (
+              {sortedVisible.map((task) => (
                 <TaskItem
                   key={task.id}
                   task={task}
                   subtasks={subtasks.filter((s) => s.task_id === task.id)}
                   semesters={semesters}
-                  isFirst={i === 0}
-                  isLast={i === sortedVisible.length - 1}
                   onToggle={toggleTask}
                   onDelete={setPendingDelete}
                   onEdit={setEditingTask}
-                  onMoveUp={(t) => moveTask(t, -1)}
-                  onMoveDown={(t) => moveTask(t, 1)}
                   onToggleSubtask={toggleSubtask}
                   onLogResult={logResult}
                   onFail={failTask}

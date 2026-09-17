@@ -32,13 +32,9 @@ export default function TaskItem({
   task,
   subtasks,
   semesters,
-  isFirst,
-  isLast,
   onToggle,
   onDelete,
   onEdit,
-  onMoveUp,
-  onMoveDown,
   onToggleSubtask,
   onLogResult,
   onFail,
@@ -47,13 +43,9 @@ export default function TaskItem({
   task: Task;
   subtasks: Subtask[];
   semesters: Semester[];
-  isFirst: boolean;
-  isLast: boolean;
   onToggle: (task: Task) => void;
   onDelete: (task: Task) => void;
   onEdit: (task: Task) => void;
-  onMoveUp: (task: Task) => void;
-  onMoveDown: (task: Task) => void;
   onToggleSubtask: (subtask: Subtask, task: Task) => void;
   onLogResult: (task: Task, resultValue: string, met: boolean) => void;
   onFail: (task: Task, note: string) => void;
@@ -222,10 +214,6 @@ export default function TaskItem({
         </div>
 
         <div className="flex flex-col items-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          <div className="flex gap-1">
-            <button onClick={() => onMoveUp(task)} disabled={isFirst} aria-label="Move up" className="focus-ring text-ink2 hover:text-ink disabled:opacity-20 px-1">↑</button>
-            <button onClick={() => onMoveDown(task)} disabled={isLast} aria-label="Move down" className="focus-ring text-ink2 hover:text-ink disabled:opacity-20 px-1">↓</button>
-          </div>
           <div className="flex gap-2 text-xs">
             <button onClick={() => onEdit(task)} className="focus-ring text-ink2 hover:text-ink">edit</button>
             {!resolved && (
@@ -242,7 +230,7 @@ export default function TaskItem({
       {showFailConfirm && (
         <ConfirmNoteDialog
           title="Mark this task as failed?"
-          message={`"${task.title}" will be marked failed and will drop off the active list once its time period ends.`}
+          message={`"${task.title}" will be marked failed and will drop off the active list 30 minutes after this.`}
           noteLabel="Why did it fail? (optional)"
           confirmLabel="Mark failed"
           danger
@@ -256,7 +244,7 @@ export default function TaskItem({
       {showExcuseConfirm && (
         <ConfirmNoteDialog
           title="Couldn't complete due to special circumstances?"
-          message={`"${task.title}" will be marked excused, not failed, and will drop off the active list once its time period ends.`}
+          message={`"${task.title}" will be marked excused, not failed, and will drop off the active list 30 minutes after this.`}
           noteLabel="What were the circumstances?"
           confirmLabel="Mark excused"
           onCancel={() => setShowExcuseConfirm(false)}
